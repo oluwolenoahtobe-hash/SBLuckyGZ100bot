@@ -1,30 +1,25 @@
 import os
 import asyncio
 import logging
-from aiohttp import web
+
 from aiogram import Bot, Dispatcher, F, Router, types
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from aiogram.filters import Command
-from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
 
 # --- Configuration ---
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-WEBHOOK_BASE_URL = os.getenv("WEBHOOK_BASE_URL")
-WEBHOOK_PATH = "/webhook"
 
-# Fail fast if the token is missing
 if not BOT_TOKEN:
     raise ValueError("BOT_TOKEN environment variable is not set!")
 
-# Setup Logging
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
 )
 logger = logging.getLogger(__name__)
 
-# --- Initialize Bot (FIXED for aiogram 3.7.0+) ---
+# --- Bot & Dispatcher ---
 bot = Bot(
     token=BOT_TOKEN,
     default=DefaultBotProperties(parse_mode=ParseMode.HTML),
@@ -33,28 +28,26 @@ dp = Dispatcher()
 router = Router()
 
 
-# --- Mock Service Layer (Replace with your AI API) ---
+# --- Mock AI Service ---
 async def analyze_product_image(image_url: str) -> dict:
-    """
-    Replace this with a real Vision AI call (e.g., OpenAI GPT-4o, Qwen3-VL).
-    """
     await asyncio.sleep(1)
     return {
         "ingredients": "Aqua, Glycerin, Niacinamide, Zinc PCA.",
         "origin": "Made in South Korea. Distributed by GlowLab Inc.",
         "category": "Skincare / Facial Serum",
-        "package": "30ml amber glass bottle with dropper. Recyclable cardboard box.",
+        "package": "30ml amber glass bottle with dropper.",
         "similar": "1. The Ordinary Niacinamide 10% + Zinc 1%\n2. Paula's Choice 10% Niacinamide Booster",
-        "notes": "User noted: Purchased from official brand store. Expiry 2027.",
+        "notes": "User noted: Purchased from official store. Expiry 2027.",
     }
 
 
 # --- Handlers ---
 @router.message(Command("start"))
 async def cmd_start(message: types.Message):
-    welcome_text = (
+    logger.info(f"/start from {message.from_user.id}")
+    await message.answer(
         "👋 <b>Welcome to SBLuckyGZ Product ID Bot!</b>\n\n"
-        "I can identify products from photos. Just send me a clear picture of the item.\n\n"
+        "Send me a photo of a product and I'll identify it.\n\n"
         "<b>Features:</b>\n"
         "1. Ingredients\n"
         "2. Country/Region\n"
@@ -63,7 +56,6 @@ async def cmd_start(message: types.Message):
         "5. Similar Products\n"
         "6. User Notes"
     )
-    await message.answer(welcome_text)
 
 
 @router.message(F.photo)
@@ -97,55 +89,26 @@ async def handle_product_photo(message: types.Message):
 @router.message(F.text & ~F.text.startswith("/"))
 async def handle_notes(message: types.Message):
     await message.answer(
-        "📝 <b>Notes Feature:</b>\n"
-        "You can add custom notes to any product. "
-        "This function is currently in development, but your message has been logged."
+        "📝 <b>Notes Feature:</b> Your message has been logged. (Coming soon.)"
     )
 
 
-# --- Webhook / Railway Setup ---
-async def on_startup(bot: Bot):
-    if WEBHOOK_BASE_URL:
-        webhook_url = f"{WEBHOOK_BASE_URL.rstrip('/')}{WEBHOOK_PATH}"
-        await bot.set_webhook(webhook_url, drop_pending_updates=True)
-        logger.info(f"✅ Webhook set to {webhook_url}")
-    else:
-        logger.warning(
-            "⚠️ WEBHOOK_BASE_URL not set. The bot will not receive updates. "
-            "Add it in Railway Variables and redeploy."
-        )
-
-
-async def on_shutdown(bot: Bot):
-    try:
-        await bot.delete_webhook()
-        logger.info("Webhook deleted.")
-    except Exception as e:
-        logger.error(f"Error deleting webhook: {e}")
-
-
-def main():
+# --- Entrypoint ---
+async def main():
     dp.include_router(router)
-    dp.startup.register(on_startup)
-    dp.shutdown.register(on_shutdown)
 
-    app = web.Application()
+    # IMPORTANT: delete any stale webhook so polling can receive updates
+    await bot.delete_webhook(drop_pending_updates=True)
 
-    # Health check endpoint for Railway
-    async def health(request):
-        return web.Response(text="OK")
+    me = await bot.get_me()
+    logger.info(f"🤖 Bot started: @{me.username} ({me.id})")
+    logger.info("🔄 Starting polling mode...")
 
-    app.router.add_get("/", health)
-    app.router.add_get("/health", health)
-
-    # Register webhook handler
-    SimpleRequestHandler(dispatcher=dp, bot=bot).register(app, path=WEBHOOK_PATH)
-    setup_application(app, dp, bot=bot)
-
-    port = int(os.getenv("PORT", 8080))
-    logger.info(f"🚀 Starting server on 0.0.0.0:{port}")
-    web.run_app(app, host="0.0.0.0", port=port)
+    await dp.start_polling(bot)
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        asyncio.run(main())
+    except (KeyboardInterrupt, SystemExit):
+        logger.info("Bot stopped.")
